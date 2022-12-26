@@ -15,6 +15,7 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
+    cursor: winit::dpi::PhysicalPosition<f64>,
 }
 
 impl State {
@@ -60,12 +61,14 @@ impl State {
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
         };
         surface.configure(&device, &config);
+        let cursor = winit::dpi::PhysicalPosition { x: 0.0, y: 0.0 };
         Self {
             surface,
             device,
             queue,
             config,
             size,
+            cursor,
         }
     }
 
@@ -76,6 +79,11 @@ impl State {
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
         }
+    }
+
+    pub fn update_cursor(&mut self, new_cursor: winit::dpi::PhysicalPosition<f64>) {
+        self.cursor = new_cursor;
+        self.surface.configure(&self.device, &self.config)
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
@@ -94,7 +102,6 @@ impl State {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-
         let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -102,9 +109,10 @@ impl State {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.1,
-                        g: 0.8,
-                        b: 0.3,
+                        r: self.cursor.x / self.size.width as f64,
+                        g: self.cursor.y / self.size.height as f64,
+                        b: (self.cursor.x + self.cursor.y)
+                            / (self.size.width + self.size.height) as f64,
                         a: 1.0,
                     }),
                     store: true,
@@ -179,6 +187,9 @@ pub async fn run() {
                     WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                         // new_inner_size is &&mut so we have to dereference it twice
                         state.resize(**new_inner_size);
+                    }
+                    WindowEvent::CursorMoved { position, .. } => {
+                        state.update_cursor(*position);
                     }
                     _ => {}
                 }
