@@ -1,3 +1,5 @@
+use std::f32::consts::PI;
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
@@ -42,6 +44,27 @@ const VERTICES: &[Vertex] = &[
 
 const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
+fn generate_vertices_circle(nb_vertices: u32, color: [f32; 3]) -> (Vec<Vertex>, Vec<u16>) {
+    assert!(nb_vertices >= 4);
+    let angle_increment = 2.0 * PI / nb_vertices as f32;
+    let mut angle: f32 = 0.0;
+    let mut vertices = vec![];
+    for _ in 0..nb_vertices {
+        vertices.push(Vertex {
+            position: [0.5 * angle.cos(), 0.5 * angle.sin(), 0.0],
+            color,
+        });
+        angle += angle_increment;
+    }
+    let mut indexes = vec![];
+    for i in 0..(nb_vertices - 2) {
+        indexes.push(i as u16);
+        indexes.push(i as u16 + 1);
+        indexes.push(nb_vertices as u16 - 1);
+    }
+    (vertices, indexes)
+}
+
 impl Vertex {
     const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
@@ -62,9 +85,13 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
+    is_polygon: bool,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
-    num_indices: u32,
+    second_vertex_buffer: wgpu::Buffer,
+    second_index_buffer: wgpu::Buffer,
+    nb_indices: u32,
+    second_nb_indices: u32,
 }
 
 impl State {
@@ -156,17 +183,30 @@ impl State {
             },
             multiview: None, // 5.
         });
+        let (vertices, indices) = generate_vertices_circle(10, [1.0, 0.0, 0.0]);
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
+            contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(INDICES),
+            contents: bytemuck::cast_slice(&indices),
             usage: wgpu::BufferUsages::INDEX,
         });
-        let num_indices = INDICES.len() as u32;
+        let second_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Second Vertex Buffer"),
+            contents: bytemuck::cast_slice(&VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let second_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Second Index Buffer"),
+            contents: bytemuck::cast_slice(&INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let nb_indices = indices.len() as u32;
+        let second_nb_indices = INDICES.len() as u32;
+        let is_polygon = false;
         Self {
             surface,
             device,
@@ -174,9 +214,13 @@ impl State {
             config,
             size,
             render_pipeline,
+            is_polygon,
             vertex_buffer,
             index_buffer,
-            num_indices,
+            second_vertex_buffer,
+            second_index_buffer,
+            nb_indices,
+            second_nb_indices,
         }
     }
 
@@ -190,7 +234,21 @@ impl State {
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
-        false
+        match event {
+            WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        state: ElementState::Released,
+                        virtual_keycode: Some(VirtualKeyCode::Space),
+                        ..
+                    },
+                ..
+            } => {
+                self.is_polygon = !self.is_polygon;
+                true
+            }
+            _ => false,
+        }
     }
 
     fn update(&mut self) {}
@@ -224,9 +282,17 @@ impl State {
             depth_stencil_attachment: None,
         });
         render_pass.set_pipeline(&self.render_pipeline);
-        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
-        render_pass.draw_indexed(0..self.num_indices, 0, 0..1); // 2.
+        let (vertex_buffer, index_buffer, num_indices) = match self.is_polygon {
+            true => (&self.vertex_buffer, &self.index_buffer, self.nb_indices),
+            false => (
+                &self.second_vertex_buffer,
+                &self.second_index_buffer,
+                self.second_nb_indices,
+            ),
+        };
+        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+        render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
+        render_pass.draw_indexed(0..num_indices, 0, 0..1); // 2.
         drop(render_pass);
 
         // submit will accept anything that implements IntoIter
